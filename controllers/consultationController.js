@@ -60,6 +60,27 @@ exports.acceptSession = async (req, res) => {
   }
 };
 
+// Expert fetches history of served clients
+exports.getServedClients = async (req, res) => {
+    try {
+        const history = await Consultation.findAll({
+            where: {
+                expertId: req.user.id,
+                status: "ended" // Only show completed sessions
+            },
+            include: [{ 
+                model: User, 
+                as: "client", 
+                attributes: ["id", "name", "email"] 
+            }],
+            order: [['updatedAt', 'DESC']] // Newest first
+        });
+        res.json(history);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
 // 4. End Session & Deduct Wallet (Atomic Transaction)
 exports.endSession = async (req, res) => {
   const t = await sequelize.transaction();

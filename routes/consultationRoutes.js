@@ -7,5 +7,6 @@ router.post('/book', protect, consultController.bookSession);
 router.put('/accept/:id', protect, consultController.acceptSession);
 router.post('/end/:id', protect, consultController.endSession);
 router.get('/pending', protect, consultController.getPendingRequests);
+router.get('/served-clients', protect, consultController.getServedClients);
 
 module.exports = router;

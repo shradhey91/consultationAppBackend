@@ -4,13 +4,16 @@ const jwt = require("jsonwebtoken");
 
 exports.register = async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, feePerMin } = req.body;
     const hashedPassword = await bcrypt.hash(password, 10);
+
     const user = await User.create({
       name,
       email,
       password: hashedPassword,
       role,
+      // Only set fee if role is expert
+      feePerMin: role === "expert" ? feePerMin : 0,
     });
     res.status(201).json({ message: "User created", userId: user.id });
   } catch (error) {
@@ -22,7 +25,7 @@ exports.getExperts = async (req, res) => {
   try {
     const experts = await User.findAll({
       where: { role: "expert" },
-      attributes: ["id", "name", "walletBalance"], // Add a 'price' field to User model if needed
+      attributes: ["id", "name", "walletBalance", "feePerMin"],
     });
     res.json(experts);
   } catch (error) {
