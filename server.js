@@ -12,6 +12,8 @@ const io = new Server(server, {
   cors: { origin: "*" }, // Allows Flutter app to connect
 });
 
+app.set("socketio", io);
+
 // Middleware
 app.use(cors());
 app.use(express.json());
