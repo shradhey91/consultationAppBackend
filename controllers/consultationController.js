@@ -26,9 +26,13 @@ exports.bookSession = async (req, res) => {
       status: "pending",
     });
 
-    const io = req.app.get("socketio");
-    io.to(`expert_${expertId}`).emit("new_booking", booking);
+    const fullBooking = await Consultation.findByPk(booking.id, {
+      include: [{ model: User, as: "client", attributes: ["name", "email"] }],
+    });
 
+    const io = req.app.get("socketio");
+
+    io.to(`expert_${expertId}`).emit("new_booking", fullBooking);
     res.status(201).json(booking);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -75,7 +79,14 @@ exports.acceptSession = async (req, res) => {
     });
 
     const io = req.app.get("socketio");
+
+    // Notify session room
     io.to(`session_${id}`).emit("session_active", { sessionId: id });
+
+    // ALSO notify specific client
+    io.to(`user_${consultation.userId}`).emit("session_active", {
+      sessionId: id,
+    });
 
     res.json({ message: "Session is now ACTIVE" });
   } catch (error) {

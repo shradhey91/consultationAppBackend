@@ -31,6 +31,11 @@ sequelize
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
 
+  socket.on("join_user", (userId) => {
+    socket.join(`user_${userId}`);
+    console.log(`User joined room: user_${userId}`);
+  });
+
   socket.on("join_expert", (expertId) => {
     socket.join(`expert_${expertId}`);
   });
@@ -41,13 +46,19 @@ io.on("connection", (socket) => {
   });
 
   socket.on("send_message", async (data) => {
-    await Message.create({
+    const message = await Message.create({
       consultationId: data.sessionId,
       senderId: data.senderId,
       text: data.text,
     });
 
-    io.to(`session_${data.sessionId}`).emit("receive_message", data);
+    const fullMessage = await Message.findByPk(message.id, {
+      include: [
+        { model: require("./models").User, as: "sender", attributes: ["name"] },
+      ],
+    });
+
+    io.to(`session_${data.sessionId}`).emit("receive_message", fullMessage);
   });
 
   socket.on("disconnect", () => {
