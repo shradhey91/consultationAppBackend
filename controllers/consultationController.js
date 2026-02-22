@@ -3,19 +3,32 @@ const { Consultation, User, sequelize } = require("../models");
 // 1. User books consultation - Includes Wallet Check
 exports.bookSession = async (req, res) => {
   try {
-    const { expertId, price } = req.body;
-    const user = await User.findByPk(req.user.id);
+    const { expertId } = req.body;
 
-    if (user.walletBalance < price) {
+    const user = await User.findByPk(req.user.id);
+    const expert = await User.findByPk(expertId);
+
+    if (!expert || expert.role !== "expert") {
+      return res.status(404).json({ message: "Expert not found" });
+    }
+
+    // 🔐 Do NOT trust frontend
+    const pricePerMin = parseFloat(expert.feePerMin);
+
+    if (user.walletBalance < pricePerMin) {
       return res.status(400).json({ message: "Insufficient wallet balance" });
     }
 
     const booking = await Consultation.create({
       userId: req.user.id,
       expertId,
-      price,
+      price: pricePerMin, // store per-minute price for now
       status: "pending",
     });
+
+    const io = req.app.get("socketio");
+    io.to(`expert_${expertId}`).emit("new_booking", booking);
+
     res.status(201).json(booking);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -48,9 +61,19 @@ exports.acceptSession = async (req, res) => {
       return res.status(404).json({ message: "Consultation not found" });
     }
 
-    await consultation.update({ status: "active" });
+    if (consultation.expertId !== req.user.id) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
 
-    // Emit socket event so the User's WaitingScreen moves to ChatScreen
+    if (consultation.status !== "pending") {
+      return res.status(400).json({ message: "Session already processed" });
+    }
+
+    await consultation.update({
+      status: "active",
+      startTime: new Date(), // ✅ Important
+    });
+
     const io = req.app.get("socketio");
     io.to(`session_${id}`).emit("session_active", { sessionId: id });
 
@@ -62,61 +85,109 @@ exports.acceptSession = async (req, res) => {
 
 // Expert fetches history of served clients
 exports.getServedClients = async (req, res) => {
-    try {
-        const history = await Consultation.findAll({
-            where: {
-                expertId: req.user.id,
-                status: "ended" // Only show completed sessions
-            },
-            include: [{ 
-                model: User, 
-                as: "client", 
-                attributes: ["id", "name", "email"] 
-            }],
-            order: [['updatedAt', 'DESC']] // Newest first
-        });
-        res.json(history);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+  try {
+    const history = await Consultation.findAll({
+      where: {
+        expertId: req.user.id,
+        status: "ended", // Only show completed sessions
+      },
+      include: [
+        {
+          model: User,
+          as: "client",
+          attributes: ["id", "name", "email"],
+        },
+      ],
+      order: [["updatedAt", "DESC"]], // Newest first
+    });
+    res.json(history);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 };
 
 // 4. End Session & Deduct Wallet (Atomic Transaction)
 exports.endSession = async (req, res) => {
   const t = await sequelize.transaction();
+
   try {
     const { id } = req.params;
-    const session = await Consultation.findByPk(id);
+
+    const session = await Consultation.findByPk(id, { transaction: t });
 
     if (!session || session.status !== "active") {
+      await t.rollback();
       return res
         .status(400)
         .json({ message: "Invalid or already ended session" });
     }
 
-    // Update session status
-    await session.update({ status: "ended" }, { transaction: t });
+    // 🔐 Authorization check
+    if (session.userId !== req.user.id && session.expertId !== req.user.id) {
+      await t.rollback();
+      return res
+        .status(403)
+        .json({ message: "Not authorized to end this session" });
+    }
 
-    // Atomic Fund Transfer: Deduct from User, Add to Expert
+    if (!session.startTime) {
+      await t.rollback();
+      return res.status(400).json({ message: "Session start time missing" });
+    }
+
+    const endTime = new Date();
+
+    // ⏱ Calculate duration
+    const durationMs = endTime - new Date(session.startTime);
+    const durationMinutes = Math.ceil(durationMs / (1000 * 60));
+
+    const pricePerMin = parseFloat(session.price);
+    const totalAmount = durationMinutes * pricePerMin;
+
+    const user = await User.findByPk(session.userId, { transaction: t });
+
+    if (parseFloat(user.walletBalance) < totalAmount) {
+      await t.rollback();
+      return res.status(400).json({ message: "Insufficient wallet balance" });
+    }
+
+    // Update session with billing data
+    await session.update(
+      {
+        status: "ended",
+        endTime,
+        totalAmount,
+      },
+      { transaction: t },
+    );
+
+    // Deduct from client
     await User.decrement("walletBalance", {
-      by: session.price,
+      by: totalAmount,
       where: { id: session.userId },
       transaction: t,
     });
 
+    // Add to expert
     await User.increment("walletBalance", {
-      by: session.price,
+      by: totalAmount,
       where: { id: session.expertId },
       transaction: t,
     });
 
     await t.commit();
 
-    // Optional: Notify both users of the updated balance via Socket
     const io = req.app.get("socketio");
-    io.to(`session_${id}`).emit("wallet_updated");
+    io.to(`session_${id}`).emit("wallet_updated", {
+      totalAmount,
+      durationMinutes,
+    });
 
-    res.json({ message: "Session ended and payment processed" });
+    res.json({
+      message: "Session ended and payment processed",
+      durationMinutes,
+      totalAmount,
+    });
   } catch (error) {
     await t.rollback();
     res.status(500).json({ error: error.message });
