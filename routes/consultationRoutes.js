@@ -6,5 +6,6 @@ const { protect } = require('../middleware/authMiddleware'); // We'll make this 
 router.post('/book', protect, consultController.bookSession);
 router.put('/accept/:id', protect, consultController.acceptSession);
 router.post('/end/:id', protect, consultController.endSession);
+router.get('/pending', protect, consultController.getPendingRequests);
 
 module.exports = router;
