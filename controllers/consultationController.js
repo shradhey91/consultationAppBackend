@@ -59,6 +59,7 @@ exports.getPendingRequests = async (req, res) => {
 exports.acceptSession = async (req, res) => {
   try {
     const { id } = req.params;
+
     const consultation = await Consultation.findByPk(id);
 
     if (!consultation) {
@@ -73,23 +74,39 @@ exports.acceptSession = async (req, res) => {
       return res.status(400).json({ message: "Session already processed" });
     }
 
+    // ✅ Activate session
     await consultation.update({
       status: "active",
-      startTime: new Date(), // ✅ Important
+      startTime: new Date(),
     });
 
     const io = req.app.get("socketio");
+    const userSocketMap = req.app.get("userSocketMap");
 
-    // Notify session room
-    io.to(`session_${id}`).emit("session_active", { sessionId: id });
+    console.log("🔵 Emitting session_active...");
+    console.log("Session room:", `session_${id}`);
+    console.log("User room:", `user_${consultation.userId}`);
 
-    // ALSO notify specific client
-    io.to(`user_${consultation.userId}`).emit("session_active", {
+    // 🔹 Emit to session room (backup)
+    io.to(`session_${id}`).emit("session_active", {
       sessionId: id,
     });
 
+    // 🔹 Emit directly to client socket (guaranteed)
+    const clientSocketId = userSocketMap[consultation.userId];
+
+    if (clientSocketId) {
+      io.to(clientSocketId).emit("session_active", {
+        sessionId: id,
+      });
+      console.log("✅ Sent session_active directly to socket:", clientSocketId);
+    } else {
+      console.log("❌ Client socket not found for user:", consultation.userId);
+    }
+
     res.json({ message: "Session is now ACTIVE" });
   } catch (error) {
+    console.error("Accept Session Error:", error);
     res.status(500).json({ error: error.message });
   }
 };
